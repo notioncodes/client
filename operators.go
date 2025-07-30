@@ -311,7 +311,6 @@ func StreamPaginated[T any, R PaginatedRequestInterface[B], B RequestBody](po *P
 			}
 
 			if err != nil {
-				fmt.Printf("err: %v\n", err)
 				paginationErr := &PaginationError{
 					Message:   err.Error(),
 					Page:      pageNum,

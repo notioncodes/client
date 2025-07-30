@@ -213,7 +213,7 @@ func TestRegistryNamespaces(t *testing.T) {
 	if searchNS == nil {
 		t.Fatal("expected Search namespace to be created, got nil")
 	}
-	if searchNS.registry != registry {
+	if searchNS.client != registry.httpClient {
 		t.Error("expected Search namespace to reference the registry")
 	}
 }

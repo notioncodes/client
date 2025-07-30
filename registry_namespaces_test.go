@@ -188,7 +188,7 @@ func TestSearchNamespaceQuery(t *testing.T) {
 	ctx := context.Background()
 
 	// Test the method exists and returns a channel.
-	resultCh := searchNS.Query(ctx, types.SearchRequest{
+	resultCh := searchNS.Stream(ctx, types.SearchRequest{
 		Query: "test search",
 		Filter: &types.SearchFilter{
 			Property: "object",
@@ -254,7 +254,7 @@ func TestNamespaceConsistency(t *testing.T) {
 	}
 
 	searchNS := registry.Search()
-	if searchNS.registry != registry {
+	if searchNS.client != registry.httpClient {
 		t.Error("SearchNamespace does not properly reference registry")
 	}
 }
@@ -312,7 +312,7 @@ func TestNamespaceErrorHandling(t *testing.T) {
 
 	// Test SearchNamespace error handling
 	searchNS := registry.Search()
-	searchResultCh := searchNS.Query(ctx, types.SearchRequest{
+	searchResultCh := searchNS.Stream(ctx, types.SearchRequest{
 		Query: "test search",
 	})
 	select {

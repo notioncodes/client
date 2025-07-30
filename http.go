@@ -25,9 +25,10 @@ type HTTPClient struct {
 	baseHeaders map[string]string
 	mu          sync.RWMutex
 	
-	// Throttling state
-	lastRequestTime time.Time
-	throttleMu      sync.Mutex
+	// Throttling state for concurrent requests
+	throttleCh      chan struct{} // Rate limiting channel
+	throttleTicker  *time.Ticker
+	throttleCloseCh chan struct{}
 }
 
 // NewHTTPClient creates a new HTTP client with the specified configuration.
@@ -78,7 +79,7 @@ func NewHTTPClient(config *Config) (*HTTPClient, error) {
 		baseHeaders[key] = value
 	}
 
-	return &HTTPClient{
+	client := &HTTPClient{
 		config:      config,
 		httpClient:  httpClient,
 		retryPolicy: retryPolicy,
@@ -86,7 +87,39 @@ func NewHTTPClient(config *Config) (*HTTPClient, error) {
 		classifier:  classifier,
 		metrics:     metrics,
 		baseHeaders: baseHeaders,
-	}, nil
+	}
+	
+	// Initialize throttling if configured
+	if config.RequestDelay > 0 {
+		client.throttleCh = make(chan struct{}, 1)
+		client.throttleTicker = time.NewTicker(config.RequestDelay)
+		client.throttleCloseCh = make(chan struct{})
+		
+		// Start the rate limiter goroutine
+		go func() {
+			defer client.throttleTicker.Stop()
+			// Initialize the channel so the first request doesn't wait
+			// The first request should go through immediately
+			client.throttleCh <- struct{}{}
+			
+			for {
+				select {
+				case <-client.throttleTicker.C:
+					// Allow the next request
+					select {
+					case client.throttleCh <- struct{}{}:
+						// Successfully sent permit
+					default:
+						// Channel full, skip this tick
+					}
+				case <-client.throttleCloseCh:
+					return
+				}
+			}
+		}()
+	}
+	
+	return client, nil
 }
 
 // Request represents an HTTP request to be made to the Notion API.
@@ -316,6 +349,25 @@ func (c *HTTPClient) executeRequest(ctx context.Context, req *Request) (*http.Re
 		return nil, err
 	}
 
+	// Apply throttling if configured (concurrent-safe rate limiting)
+	var totalThrottleTime time.Duration
+	if c.config.RequestDelay > 0 {
+		throttleStart := time.Now()
+		
+		// Wait for permission from rate limiter
+		select {
+		case <-c.throttleCh:
+			// Got permission, calculate actual wait time
+			actualWait := time.Since(throttleStart)
+			// Only count as throttling if we actually waited a meaningful amount
+			if actualWait > time.Millisecond {
+				totalThrottleTime = actualWait
+			}
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+
 	startTime := time.Now()
 	var retryCount int64
 
@@ -351,6 +403,11 @@ func (c *HTTPClient) executeRequest(ctx context.Context, req *Request) (*http.Re
 			}
 		}
 
+		// Record throttling if it occurred
+		if totalThrottleTime > 0 {
+			c.metrics.RecordThrottle(totalThrottleTime)
+		}
+		
 		operation := fmt.Sprintf("%s %s", req.Method, req.Path)
 		c.metrics.RecordRequest(operation, req.Method, req.Path, statusCode, duration, bytesIn, bytesOut, retryCount, err)
 	}
@@ -367,31 +424,7 @@ func (c *HTTPClient) executeRequest(ctx context.Context, req *Request) (*http.Re
 
 // doRequest performs a single HTTP request without retry logic.
 func (c *HTTPClient) doRequest(ctx context.Context, req *Request, attempt int) (*http.Response, error) {
-	// Apply throttling if configured
-	if c.config.RequestDelay > 0 {
-		c.throttleMu.Lock()
-		since := time.Since(c.lastRequestTime)
-		if since < c.config.RequestDelay {
-			waitTime := c.config.RequestDelay - since
-			c.throttleMu.Unlock()
-			
-			// Track throttling in metrics
-			if c.metrics != nil {
-				c.metrics.RecordThrottle(waitTime)
-			}
-			
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(waitTime):
-				// Continue with request after throttling delay
-			}
-			
-			c.throttleMu.Lock()
-		}
-		c.lastRequestTime = time.Now()
-		c.throttleMu.Unlock()
-	}
+	// Throttling is now handled at the executeRequest level to avoid duplicate counting on retries
 
 	// Build URL
 	url := c.config.BaseURL + req.Path
@@ -644,6 +677,11 @@ func (c *HTTPClient) GetThrottleStats() (int64, time.Duration) {
 }
 
 func (c *HTTPClient) Close() error {
+	// Close throttling resources if initialized
+	if c.throttleCloseCh != nil {
+		close(c.throttleCloseCh)
+	}
+	
 	// Close the underlying HTTP client's transport
 	if transport, ok := c.httpClient.Transport.(*http.Transport); ok {
 		transport.CloseIdleConnections()
