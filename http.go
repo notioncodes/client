@@ -306,24 +306,49 @@ func (c *HTTPClient) executeRequest(ctx context.Context, req *Request) (*http.Re
 	canExecute, err := c.breaker.CanExecute()
 	if !canExecute {
 		if c.metrics != nil {
-			c.metrics.RecordRequest("circuit_breaker_open", time.Duration(0), err)
+			c.metrics.RecordRequestSimple("circuit_breaker_open", time.Duration(0), err)
 		}
+		// Circuit breaker trips are tracked in the metrics collector
 		return nil, err
 	}
 
 	startTime := time.Now()
+	var retryCount int64
 
 	// Execute with retry logic
 	result, err := ExecuteWithRetry(ctx, func(ctx context.Context, attempt int) (*http.Response, error) {
+		if attempt > 1 {
+			retryCount++
+		}
 		return c.doRequest(ctx, req, attempt)
 	}, c.retryPolicy)
 
 	duration := time.Since(startTime)
 
-	// Record metrics
+	// Legacy metrics recording is now handled in the consolidated section below
+
+	// Record comprehensive metrics
 	if c.metrics != nil {
+		statusCode := 0
+		var bytesIn, bytesOut int64
+
+		if result != nil {
+			statusCode = result.StatusCode
+			if contentLength := result.Header.Get("Content-Length"); contentLength != "" {
+				if bytes, parseErr := strconv.ParseInt(contentLength, 10, 64); parseErr == nil {
+					bytesIn = bytes
+				}
+			}
+		}
+
+		if req.Body != nil {
+			if bodyBytes, marshalErr := json.Marshal(req.Body); marshalErr == nil {
+				bytesOut = int64(len(bodyBytes))
+			}
+		}
+
 		operation := fmt.Sprintf("%s %s", req.Method, req.Path)
-		c.metrics.RecordRequest(operation, duration, err)
+		c.metrics.RecordRequest(operation, req.Method, req.Path, statusCode, duration, bytesIn, bytesOut, retryCount, err)
 	}
 
 	// Update circuit breaker
@@ -483,6 +508,92 @@ func (c *HTTPClient) ResetMetrics() {
 //
 //	client := NewHTTPClient(config)
 //	defer client.Close()
+//
+// GetHTTPStats returns comprehensive HTTP client statistics.
+// This method provides access to the consolidated metrics collector.
+//
+// Returns:
+//   - *Metrics: Current metrics snapshot, or nil if metrics are disabled.
+//
+// Example:
+//
+//	stats := client.GetHTTPStats()
+//	if stats != nil {
+//	    fmt.Printf("Total requests: %d\n", stats.TotalRequests)
+//	    fmt.Printf("Success rate: %.2f%%\n", stats.SuccessRate*100)
+//	}
+func (c *HTTPClient) GetHTTPStats() *Metrics {
+	if c.metrics == nil {
+		return nil
+	}
+	return c.metrics.GetMetrics()
+}
+
+// ResetHTTPStats resets all HTTP client statistics.
+// This is useful for periodic metrics reporting or testing.
+//
+// Example:
+//
+//	stats := client.GetHTTPStats()
+//	// Report current stats...
+//	client.ResetHTTPStats() // Start fresh
+func (c *HTTPClient) ResetHTTPStats() {
+	if c.metrics != nil {
+		c.metrics.Reset()
+	}
+}
+
+// GetSuccessRate returns the success rate as a percentage (0-100).
+// Returns 0 if no requests have been made or metrics are disabled.
+//
+// Returns:
+//   - float64: Success rate as a percentage.
+//
+// Example:
+//
+//	rate := client.GetSuccessRate()
+//	fmt.Printf("Success rate: %.2f%%\n", rate)
+func (c *HTTPClient) GetSuccessRate() float64 {
+	if c.metrics == nil {
+		return 0
+	}
+	metrics := c.metrics.GetMetrics()
+	return metrics.SuccessRate * 100
+}
+
+// GetAverageDuration returns the average request duration across all operations.
+// Returns 0 if no requests have been made or metrics are disabled.
+//
+// Returns:
+//   - time.Duration: Average request duration.
+//
+// Example:
+//
+//	avg := client.GetAverageDuration()
+//	fmt.Printf("Average duration: %v\n", avg)
+func (c *HTTPClient) GetAverageDuration() time.Duration {
+	if c.metrics == nil {
+		return 0
+	}
+	metrics := c.metrics.GetMetrics()
+	if metrics.TotalRequests == 0 {
+		return 0
+	}
+	// Calculate average from response times percentile data
+	if metrics.ResponseTimes != nil && len(metrics.Operations) > 0 {
+		var totalDuration time.Duration
+		var totalCount int64
+		for _, op := range metrics.Operations {
+			totalDuration += op.TotalDuration
+			totalCount += op.Count
+		}
+		if totalCount > 0 {
+			return totalDuration / time.Duration(totalCount)
+		}
+	}
+	return 0
+}
+
 func (c *HTTPClient) Close() error {
 	// Close the underlying HTTP client's transport
 	if transport, ok := c.httpClient.Transport.(*http.Transport); ok {

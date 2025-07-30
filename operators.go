@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"reflect"
 	"strconv"
 	"time"
 
@@ -252,14 +251,6 @@ func ExecutePaginated[T any, R PaginatedRequestInterface[B], B RequestBody](po *
 // StreamPaginated performs a paginated operation and streams individual results.
 func StreamPaginated[T any, R PaginatedRequestInterface[B], B RequestBody](po *PaginatedOperator[T], ctx context.Context, req R) <-chan Result[T] {
 	resultCh := make(chan Result[T], po.config.PageSize)
-
-	t := reflect.TypeOf(req)
-	fmt.Printf("type of req: %v\n", t)
-	if t.Implements(reflect.TypeOf((*PaginatedRequestInterface[B])(nil)).Elem()) {
-		fmt.Printf("req is a PaginatedRequestInterface: %v\n", req)
-	} else {
-		fmt.Printf("req is not a PaginatedRequestInterface: %v\n", req)
-	}
 
 	go func() {
 		defer close(resultCh)

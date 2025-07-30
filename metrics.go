@@ -1,6 +1,7 @@
 package client
 
 import (
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -14,6 +15,7 @@ type MetricsCollector struct {
 	// Atomic counters for high-frequency operations
 	totalRequests      int64
 	totalErrors        int64
+	totalSuccesses     int64
 	totalRetries       int64
 	circuitBreakerHits int64
 	rateLimitHits      int64
@@ -21,7 +23,12 @@ type MetricsCollector struct {
 	// Protected by mutex for complex operations
 	operationStats    map[string]*OperationStats
 	errorStats        map[string]int64
+	statusStats       map[int]int64
+	pathStats         map[string]int64
+	methodStats       map[string]int64
 	responseTimeStats *ResponseTimeStats
+	totalBytesIn      int64
+	totalBytesOut     int64
 	startTime         time.Time
 }
 
@@ -51,6 +58,7 @@ type Metrics struct {
 	// Basic counters
 	TotalRequests      int64 `json:"total_requests"`
 	TotalErrors        int64 `json:"total_errors"`
+	TotalSuccesses     int64 `json:"total_successes"`
 	TotalRetries       int64 `json:"total_retries"`
 	CircuitBreakerHits int64 `json:"circuit_breaker_hits"`
 	RateLimitHits      int64 `json:"rate_limit_hits"`
@@ -64,8 +72,15 @@ type Metrics struct {
 	// Operation-specific stats
 	Operations map[string]*OperationStats `json:"operations"`
 
-	// Error breakdown
-	ErrorBreakdown map[string]int64 `json:"error_breakdown"`
+	// Request breakdown by various dimensions
+	ErrorBreakdown  map[string]int64 `json:"error_breakdown"`
+	StatusBreakdown map[int]int64    `json:"status_breakdown"`
+	PathBreakdown   map[string]int64 `json:"path_breakdown"`
+	MethodBreakdown map[string]int64 `json:"method_breakdown"`
+
+	// Byte tracking
+	TotalBytesIn  int64 `json:"total_bytes_in"`
+	TotalBytesOut int64 `json:"total_bytes_out"`
 
 	// Response time statistics
 	ResponseTimes *ResponseTimeStats `json:"response_times"`
@@ -90,25 +105,37 @@ func NewMetricsCollector() *MetricsCollector {
 	return &MetricsCollector{
 		operationStats:    make(map[string]*OperationStats),
 		errorStats:        make(map[string]int64),
+		statusStats:       make(map[int]int64),
+		pathStats:         make(map[string]int64),
+		methodStats:       make(map[string]int64),
 		responseTimeStats: &ResponseTimeStats{samples: make([]time.Duration, 0, 1000)},
 		startTime:         time.Now(),
 	}
 }
 
-// RecordRequest records metrics for a completed request.
+// RecordRequest records metrics for a completed request with comprehensive tracking.
 //
 // Arguments:
 //   - operation: Description of the operation (e.g., "GET /pages").
+//   - method: HTTP method (GET, POST, etc.).
+//   - path: Request path.
+//   - statusCode: HTTP status code (0 if error occurred before response).
 //   - duration: How long the operation took.
+//   - bytesIn: Response bytes received.
+//   - bytesOut: Request bytes sent.
+//   - retryCount: Number of retries attempted.
 //   - err: Error that occurred (nil if successful).
 //
 // Example:
 //
 //	start := time.Now()
 //	resp, err := httpClient.Get(ctx, "/pages", nil)
-//	collector.RecordRequest("GET /pages", time.Since(start), err)
-func (mc *MetricsCollector) RecordRequest(operation string, duration time.Duration, err error) {
+//	collector.RecordRequest("GET /pages", "GET", "/pages", resp.StatusCode, time.Since(start), bytesIn, bytesOut, 0, err)
+func (mc *MetricsCollector) RecordRequest(operation, method, path string, statusCode int, duration time.Duration, bytesIn, bytesOut, retryCount int64, err error) {
 	atomic.AddInt64(&mc.totalRequests, 1)
+	atomic.AddInt64(&mc.totalRetries, retryCount)
+	atomic.AddInt64(&mc.totalBytesIn, bytesIn)
+	atomic.AddInt64(&mc.totalBytesOut, bytesOut)
 
 	if err != nil {
 		atomic.AddInt64(&mc.totalErrors, 1)
@@ -126,11 +153,20 @@ func (mc *MetricsCollector) RecordRequest(operation string, duration time.Durati
 			atomic.AddInt64(&mc.circuitBreakerHits, 1)
 		}
 		mc.mu.Unlock()
+	} else {
+		atomic.AddInt64(&mc.totalSuccesses, 1)
 	}
 
 	// Record operation-specific stats
 	mc.mu.Lock()
 	defer mc.mu.Unlock()
+
+	// Track by method, path, and status code
+	mc.methodStats[method]++
+	mc.pathStats[path]++
+	if statusCode > 0 {
+		mc.statusStats[statusCode]++
+	}
 
 	stats, exists := mc.operationStats[operation]
 	if !exists {
@@ -167,6 +203,32 @@ func (mc *MetricsCollector) RecordRequest(operation string, duration time.Durati
 //	collector.RecordRetry()
 func (mc *MetricsCollector) RecordRetry() {
 	atomic.AddInt64(&mc.totalRetries, 1)
+}
+
+// RecordRequestSimple records metrics for a completed request with basic information.
+// This is a backward compatibility method for existing code.
+//
+// Arguments:
+//   - operation: Description of the operation (e.g., "GET /pages").
+//   - duration: How long the operation took.
+//   - err: Error that occurred (nil if successful).
+//
+// Example:
+//
+//	start := time.Now()
+//	resp, err := httpClient.Get(ctx, "/pages", nil)
+//	collector.RecordRequestSimple("GET /pages", time.Since(start), err)
+func (mc *MetricsCollector) RecordRequestSimple(operation string, duration time.Duration, err error) {
+	// Extract method and path from operation string
+	parts := strings.Fields(operation)
+	method := "UNKNOWN"
+	path := "/unknown"
+	if len(parts) >= 2 {
+		method = parts[0]
+		path = parts[1]
+	}
+	
+	mc.RecordRequest(operation, method, path, 0, duration, 0, 0, 0, err)
 }
 
 // GetMetrics returns a snapshot of current metrics.
@@ -224,9 +286,26 @@ func (mc *MetricsCollector) GetMetrics() *Metrics {
 		responseTimesCopy = mc.responseTimeStats.calculatePercentiles()
 	}
 
+	// Copy status, path, and method breakdowns
+	statusBreakdown := make(map[int]int64)
+	for status, count := range mc.statusStats {
+		statusBreakdown[status] = count
+	}
+
+	pathBreakdown := make(map[string]int64)
+	for path, count := range mc.pathStats {
+		pathBreakdown[path] = count
+	}
+
+	methodBreakdown := make(map[string]int64)
+	for method, count := range mc.methodStats {
+		methodBreakdown[method] = count
+	}
+
 	return &Metrics{
 		TotalRequests:      totalRequests,
 		TotalErrors:        totalErrors,
+		TotalSuccesses:     atomic.LoadInt64(&mc.totalSuccesses),
 		TotalRetries:       totalRetries,
 		CircuitBreakerHits: atomic.LoadInt64(&mc.circuitBreakerHits),
 		RateLimitHits:      atomic.LoadInt64(&mc.rateLimitHits),
@@ -236,6 +315,11 @@ func (mc *MetricsCollector) GetMetrics() *Metrics {
 		RequestsPerSecond:  requestsPerSecond,
 		Operations:         operations,
 		ErrorBreakdown:     errorBreakdown,
+		StatusBreakdown:    statusBreakdown,
+		PathBreakdown:      pathBreakdown,
+		MethodBreakdown:    methodBreakdown,
+		TotalBytesIn:       atomic.LoadInt64(&mc.totalBytesIn),
+		TotalBytesOut:      atomic.LoadInt64(&mc.totalBytesOut),
 		ResponseTimes:      responseTimesCopy,
 		CollectionStart:    mc.startTime,
 		CollectionTime:     now,
@@ -256,13 +340,19 @@ func (mc *MetricsCollector) Reset() {
 	// Reset atomic counters
 	atomic.StoreInt64(&mc.totalRequests, 0)
 	atomic.StoreInt64(&mc.totalErrors, 0)
+	atomic.StoreInt64(&mc.totalSuccesses, 0)
 	atomic.StoreInt64(&mc.totalRetries, 0)
 	atomic.StoreInt64(&mc.circuitBreakerHits, 0)
 	atomic.StoreInt64(&mc.rateLimitHits, 0)
+	atomic.StoreInt64(&mc.totalBytesIn, 0)
+	atomic.StoreInt64(&mc.totalBytesOut, 0)
 
 	// Reset maps
 	mc.operationStats = make(map[string]*OperationStats)
 	mc.errorStats = make(map[string]int64)
+	mc.statusStats = make(map[int]int64)
+	mc.pathStats = make(map[string]int64)
+	mc.methodStats = make(map[string]int64)
 
 	// Reset response time stats
 	mc.responseTimeStats = &ResponseTimeStats{samples: make([]time.Duration, 0, 1000)}

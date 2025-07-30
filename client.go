@@ -21,12 +21,12 @@ type Client struct {
 //   - *Client: A new client instance ready for API operations.
 //   - error: Configuration or initialization error.
 func New(config *Config) (*Client, error) {
-	httpClient, err := NewHTTPClient(config)
+	HttpClient, err := NewHTTPClient(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP client: %w", err)
 	}
 
-	registry := NewRegistry(config, httpClient)
+	registry := NewRegistry(config, HttpClient)
 
 	return &Client{
 		config:   config,
