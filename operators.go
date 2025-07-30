@@ -61,6 +61,7 @@ type OperatorConfig struct {
 	MaxPages int
 
 	// Timeout is the timeout for individual operations.
+	// Set to 0 to disable timeout (default).
 	Timeout time.Duration
 
 	// EnableCaching enables response caching.
@@ -76,7 +77,7 @@ func DefaultOperatorConfig() *OperatorConfig {
 		Concurrency:   10,
 		PageSize:      100,
 		MaxPages:      0, // unlimited
-		Timeout:       30 * time.Second,
+		Timeout:       0, // No timeout by default
 		EnableCaching: false,
 		CacheTTL:      5 * time.Minute,
 	}

@@ -57,7 +57,7 @@ type Config struct {
 	Version string
 
 	// Timeout is the HTTP request timeout duration.
-	// Defaults to 30 seconds if not specified.
+	// If zero, no timeout is applied.
 	Timeout time.Duration
 
 	// MaxRetries is the maximum number of retry attempts for failed requests.
@@ -151,7 +151,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		BaseURL:                 "https://api.notion.com/v1",
 		Version:                 "2022-06-28",
-		Timeout:                 30 * time.Second,
+		Timeout:                 0, // No timeout by default
 		MaxRetries:              3,
 		BaseBackoff:             1 * time.Second,
 		MaxBackoff:              30 * time.Second,
@@ -199,8 +199,9 @@ func (c *Config) Validate() error {
 		c.Version = "2022-06-28"
 	}
 
-	if c.Timeout == 0 {
-		c.Timeout = 30 * time.Second
+	// Timeout can be 0 (no timeout) or positive
+	if c.Timeout < 0 {
+		return &ConfigError{Field: "Timeout", Message: "timeout cannot be negative"}
 	}
 
 	if c.MaxRetries < 0 {
@@ -293,10 +294,16 @@ func (c *Config) CreateHTTPClient() *http.Client {
 		ForceAttemptHTTP2:   true,
 	}
 
-	return &http.Client{
+	client := &http.Client{
 		Transport: transport,
-		Timeout:   c.Timeout,
 	}
+	
+	// Only set timeout if it's greater than 0
+	if c.Timeout > 0 {
+		client.Timeout = c.Timeout
+	}
+	
+	return client
 }
 
 // ConfigError represents a configuration validation error.
