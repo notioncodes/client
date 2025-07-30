@@ -7,8 +7,8 @@ import (
 	"github.com/notioncodes/types"
 )
 
-// ExportResult contains the results of an export operation.
-type ExportResult struct {
+// ExportJobResult contains the results of an export operation.
+type ExportJobResult struct {
 	Start    time.Time                `json:"start"`
 	End      time.Time                `json:"end"`
 	Success  map[types.ObjectType]int `json:"success"`
@@ -26,8 +26,8 @@ type ExportError struct {
 }
 
 // NewExportResult creates a new ExportResult.
-func NewExportResult() *ExportResult {
-	return &ExportResult{
+func NewExportResult() *ExportJobResult {
+	return &ExportJobResult{
 		Start:   time.Now(),
 		Success: make(map[types.ObjectType]int),
 		Errors:  []ExportError{},
@@ -40,7 +40,7 @@ func NewExportResult() *ExportResult {
 // - objectType: The type of object that errored.
 // - objectID: The ID of the object that errored.
 // - err: The error that occurred.
-func (e *ExportResult) Errored(objectType types.ObjectType, objectID string, err error) {
+func (e *ExportJobResult) Errored(objectType types.ObjectType, objectID string, err error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.Errors = append(e.Errors, ExportError{
@@ -56,7 +56,7 @@ func (e *ExportResult) Errored(objectType types.ObjectType, objectID string, err
 // Arguments:
 // - objectType: The type of object that was exported.
 // - r: The export result for the object.
-func (e *ExportResult) Successful(objectType types.ObjectType, r *ExportResult) {
+func (e *ExportJobResult) Successful(objectType types.ObjectType, r *ExportJobResult) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -68,7 +68,7 @@ func (e *ExportResult) Successful(objectType types.ObjectType, r *ExportResult) 
 //
 // Returns:
 // - The total number of objects exported.
-func (e *ExportResult) Total() int {
+func (e *ExportJobResult) Total() int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 

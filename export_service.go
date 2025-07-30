@@ -8,6 +8,14 @@ import (
 	"github.com/notioncodes/types"
 )
 
+// ExportResult contains the results of an export operation.
+type ExportResult struct {
+	Pages     []*ExportPageResult
+	Blocks    []*ExportBlockResult
+	Comments  []*ExportCommentResult
+	Databases []*ExportDatabaseResult
+}
+
 // ExportDatabaseOptions represents the options for exporting a database.
 type ExportDatabaseOptions struct {
 	// If true, the pages that are linked to the database will be exported.
