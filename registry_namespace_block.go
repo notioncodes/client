@@ -74,6 +74,52 @@ func (ns *BlockNamespace) GetChildren(ctx context.Context, blockID types.BlockID
 	return StreamPaginated(paginatedOp, ctx, req)
 }
 
+// GetChildrenRecursive retrieves all child blocks recursively, including nested children.
+// This method efficiently handles blocks with has_children=true by recursively fetching
+// their child blocks and flattening the result into a single channel.
+//
+// Arguments:
+//   - ctx: Context for cancellation and timeouts.
+//   - blockID: The ID of the parent block.
+//
+// Returns:
+//   - <-chan Result[types.Block]: Channel of all descendant block results.
+func (ns *BlockNamespace) GetChildrenRecursive(ctx context.Context, blockID types.BlockID) <-chan Result[types.Block] {
+	resultCh := make(chan Result[types.Block], 100)
+
+	go func() {
+		defer close(resultCh)
+		ns.fetchChildrenRecursive(ctx, blockID, resultCh)
+	}()
+
+	return resultCh
+}
+
+// fetchChildrenRecursive is the internal recursive function that fetches children
+func (ns *BlockNamespace) fetchChildrenRecursive(ctx context.Context, blockID types.BlockID, resultCh chan<- Result[types.Block]) {
+	// Get immediate children
+	childrenCh := ns.GetChildren(ctx, blockID)
+
+	childCount := 0
+	recursiveCount := 0
+	for result := range childrenCh {
+		if result.IsError() {
+			resultCh <- result
+			return
+		}
+
+		childCount++
+		// Send the current block to the result channel
+		resultCh <- result
+
+		// If this block has children, recursively fetch them
+		if result.Data.HasChildren {
+			recursiveCount++
+			ns.fetchChildrenRecursive(ctx, result.Data.ID, resultCh)
+		}
+	}
+}
+
 // BlockChildrenListRequest represents a request to list block children.
 type BlockChildrenListRequest struct {
 	BlockID     types.BlockID `json:"-"`

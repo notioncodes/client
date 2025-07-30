@@ -24,7 +24,7 @@ type HTTPClient struct {
 	metrics     *MetricsCollector
 	baseHeaders map[string]string
 	mu          sync.RWMutex
-	
+
 	// Throttling state for concurrent requests
 	throttleCh      chan struct{} // Rate limiting channel
 	throttleTicker  *time.Ticker
@@ -90,20 +90,20 @@ func NewHTTPClient(config *Config) (*HTTPClient, error) {
 		metrics:     metrics,
 		baseHeaders: baseHeaders,
 	}
-	
+
 	// Initialize throttling if configured
 	if config.RequestDelay > 0 {
 		client.throttleCh = make(chan struct{}, 1)
 		client.throttleTicker = time.NewTicker(config.RequestDelay)
 		client.throttleCloseCh = make(chan struct{})
-		
+
 		// Start the rate limiter goroutine
 		go func() {
 			defer client.throttleTicker.Stop()
 			// Initialize the channel so the first request doesn't wait
 			// The first request should go through immediately
 			client.throttleCh <- struct{}{}
-			
+
 			for {
 				select {
 				case <-client.throttleTicker.C:
@@ -120,7 +120,7 @@ func NewHTTPClient(config *Config) (*HTTPClient, error) {
 			}
 		}()
 	}
-	
+
 	return client, nil
 }
 
@@ -355,7 +355,7 @@ func (c *HTTPClient) executeRequest(ctx context.Context, req *Request) (*http.Re
 	var totalThrottleTime time.Duration
 	if c.config.RequestDelay > 0 {
 		throttleStart := time.Now()
-		
+
 		// Wait for permission from rate limiter
 		select {
 		case <-c.throttleCh:
@@ -415,7 +415,7 @@ func (c *HTTPClient) executeRequest(ctx context.Context, req *Request) (*http.Re
 		if totalThrottleTime > 0 {
 			c.metrics.RecordThrottle(totalThrottleTime)
 		}
-		
+
 		operation := fmt.Sprintf("%s %s", req.Method, req.Path)
 		c.metrics.RecordRequest(operation, req.Method, req.Path, statusCode, duration, bytesIn, bytesOut, retryCount, err)
 	}
@@ -694,7 +694,7 @@ func (c *HTTPClient) Close() error {
 		}
 		c.throttleCloseMu.Unlock()
 	}
-	
+
 	// Close the underlying HTTP client's transport
 	if transport, ok := c.httpClient.Transport.(*http.Transport); ok {
 		transport.CloseIdleConnections()
