@@ -24,6 +24,10 @@ type HTTPClient struct {
 	metrics     *MetricsCollector
 	baseHeaders map[string]string
 	mu          sync.RWMutex
+	
+	// Throttling state
+	lastRequestTime time.Time
+	throttleMu      sync.Mutex
 }
 
 // NewHTTPClient creates a new HTTP client with the specified configuration.
@@ -363,6 +367,32 @@ func (c *HTTPClient) executeRequest(ctx context.Context, req *Request) (*http.Re
 
 // doRequest performs a single HTTP request without retry logic.
 func (c *HTTPClient) doRequest(ctx context.Context, req *Request, attempt int) (*http.Response, error) {
+	// Apply throttling if configured
+	if c.config.RequestDelay > 0 {
+		c.throttleMu.Lock()
+		since := time.Since(c.lastRequestTime)
+		if since < c.config.RequestDelay {
+			waitTime := c.config.RequestDelay - since
+			c.throttleMu.Unlock()
+			
+			// Track throttling in metrics
+			if c.metrics != nil {
+				c.metrics.RecordThrottle(waitTime)
+			}
+			
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(waitTime):
+				// Continue with request after throttling delay
+			}
+			
+			c.throttleMu.Lock()
+		}
+		c.lastRequestTime = time.Now()
+		c.throttleMu.Unlock()
+	}
+
 	// Build URL
 	url := c.config.BaseURL + req.Path
 	if req.Query != nil && len(req.Query) > 0 {
@@ -592,6 +622,25 @@ func (c *HTTPClient) GetAverageDuration() time.Duration {
 		}
 	}
 	return 0
+}
+
+// GetThrottleStats returns throttling statistics.
+// Returns throttle wait count and total wait time.
+//
+// Returns:
+//   - int64: Number of times requests were throttled.
+//   - time.Duration: Total time spent waiting due to throttling.
+//
+// Example:
+//
+//	count, totalWait := client.GetThrottleStats()
+//	fmt.Printf("Throttled %d requests for total of %v\n", count, totalWait)
+func (c *HTTPClient) GetThrottleStats() (int64, time.Duration) {
+	if c.metrics == nil {
+		return 0, 0
+	}
+	metrics := c.metrics.GetMetrics()
+	return metrics.ThrottleWaits, metrics.ThrottleWaitTime
 }
 
 func (c *HTTPClient) Close() error {

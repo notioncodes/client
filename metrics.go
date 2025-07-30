@@ -19,6 +19,8 @@ type MetricsCollector struct {
 	totalRetries       int64
 	circuitBreakerHits int64
 	rateLimitHits      int64
+	throttleWaits      int64
+	throttleWaitTime   int64 // Total time spent waiting for throttling (nanoseconds)
 
 	// Protected by mutex for complex operations
 	operationStats    map[string]*OperationStats
@@ -62,6 +64,8 @@ type Metrics struct {
 	TotalRetries       int64 `json:"total_retries"`
 	CircuitBreakerHits int64 `json:"circuit_breaker_hits"`
 	RateLimitHits      int64 `json:"rate_limit_hits"`
+	ThrottleWaits      int64 `json:"throttle_waits"`
+	ThrottleWaitTime   time.Duration `json:"throttle_wait_time"`
 
 	// Derived metrics
 	ErrorRate         float64 `json:"error_rate"`
@@ -205,6 +209,19 @@ func (mc *MetricsCollector) RecordRetry() {
 	atomic.AddInt64(&mc.totalRetries, 1)
 }
 
+// RecordThrottle records a throttling event where a request was delayed.
+//
+// Arguments:
+//   - waitTime: The duration the request was delayed due to throttling.
+//
+// Example:
+//
+//	collector.RecordThrottle(100 * time.Millisecond)
+func (mc *MetricsCollector) RecordThrottle(waitTime time.Duration) {
+	atomic.AddInt64(&mc.throttleWaits, 1)
+	atomic.AddInt64(&mc.throttleWaitTime, int64(waitTime))
+}
+
 // RecordRequestSimple records metrics for a completed request with basic information.
 // This is a backward compatibility method for existing code.
 //
@@ -309,6 +326,8 @@ func (mc *MetricsCollector) GetMetrics() *Metrics {
 		TotalRetries:       totalRetries,
 		CircuitBreakerHits: atomic.LoadInt64(&mc.circuitBreakerHits),
 		RateLimitHits:      atomic.LoadInt64(&mc.rateLimitHits),
+		ThrottleWaits:      atomic.LoadInt64(&mc.throttleWaits),
+		ThrottleWaitTime:   time.Duration(atomic.LoadInt64(&mc.throttleWaitTime)),
 		ErrorRate:          errorRate,
 		SuccessRate:        successRate,
 		AverageRetries:     avgRetries,
@@ -344,6 +363,8 @@ func (mc *MetricsCollector) Reset() {
 	atomic.StoreInt64(&mc.totalRetries, 0)
 	atomic.StoreInt64(&mc.circuitBreakerHits, 0)
 	atomic.StoreInt64(&mc.rateLimitHits, 0)
+	atomic.StoreInt64(&mc.throttleWaits, 0)
+	atomic.StoreInt64(&mc.throttleWaitTime, 0)
 	atomic.StoreInt64(&mc.totalBytesIn, 0)
 	atomic.StoreInt64(&mc.totalBytesOut, 0)
 

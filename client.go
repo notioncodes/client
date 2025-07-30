@@ -2,6 +2,7 @@ package client
 
 import (
 	"fmt"
+	"time"
 )
 
 // Client is the main entry point for the Notion API client.
@@ -62,6 +63,21 @@ func (c *Client) Users() *UserNamespace {
 //	}
 func (c *Client) GetMetrics() *Metrics {
 	return c.Registry.httpClient.GetMetrics()
+}
+
+// GetThrottleStats returns throttling statistics for the client.
+// This provides insight into how often requests are being delayed due to throttling.
+//
+// Returns:
+//   - int64: Number of times requests were throttled.
+//   - time.Duration: Total time spent waiting due to throttling.
+//
+// Example:
+//
+//	count, totalWait := client.GetThrottleStats()
+//	fmt.Printf("Throttled %d requests for total of %v\n", count, totalWait)
+func (c *Client) GetThrottleStats() (int64, time.Duration) {
+	return c.Registry.httpClient.GetThrottleStats()
 }
 
 // Close gracefully closes the client and releases resources.

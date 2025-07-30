@@ -128,6 +128,11 @@ type Config struct {
 	// Larger buffers can improve throughput but use more memory.
 	// Defaults to 100 if not specified.
 	BufferSize int
+
+	// RequestDelay is the minimum delay between consecutive HTTP requests.
+	// This provides throttling to prevent overwhelming the Notion API.
+	// Set to 0 to disable throttling. Defaults to 0 (no throttling).
+	RequestDelay time.Duration
 }
 
 // DefaultConfig returns a configuration with sensible defaults for production use.
@@ -163,6 +168,7 @@ func DefaultConfig() *Config {
 		CircuitBreakerThreshold: 0.5,
 		CircuitBreakerTimeout:   60 * time.Second,
 		BufferSize:              100,
+		RequestDelay:            0, // No throttling by default
 	}
 }
 
@@ -258,6 +264,11 @@ func (c *Config) Validate() error {
 
 	if c.BufferSize <= 0 {
 		c.BufferSize = 100
+	}
+
+	// RequestDelay can be 0 (no throttling) or positive
+	if c.RequestDelay < 0 {
+		return &ConfigError{Field: "RequestDelay", Message: "request delay cannot be negative"}
 	}
 
 	return nil
