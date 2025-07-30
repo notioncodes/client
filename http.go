@@ -29,6 +29,8 @@ type HTTPClient struct {
 	throttleCh      chan struct{} // Rate limiting channel
 	throttleTicker  *time.Ticker
 	throttleCloseCh chan struct{}
+	throttleClosed  bool
+	throttleCloseMu sync.Mutex
 }
 
 // NewHTTPClient creates a new HTTP client with the specified configuration.
@@ -359,9 +361,15 @@ func (c *HTTPClient) executeRequest(ctx context.Context, req *Request) (*http.Re
 		case <-c.throttleCh:
 			// Got permission, calculate actual wait time
 			actualWait := time.Since(throttleStart)
-			// Only count as throttling if we actually waited a meaningful amount
-			if actualWait > time.Millisecond {
-				totalThrottleTime = actualWait
+			// Only count as throttling if we actually waited more than the expected delay
+			// This prevents counting the full accumulated wait from concurrent requests
+			if actualWait > c.config.RequestDelay/2 {
+				// Cap the throttle time to the configured delay to avoid inflated numbers
+				if actualWait > c.config.RequestDelay {
+					totalThrottleTime = c.config.RequestDelay
+				} else {
+					totalThrottleTime = actualWait
+				}
 			}
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -679,7 +687,12 @@ func (c *HTTPClient) GetThrottleStats() (int64, time.Duration) {
 func (c *HTTPClient) Close() error {
 	// Close throttling resources if initialized
 	if c.throttleCloseCh != nil {
-		close(c.throttleCloseCh)
+		c.throttleCloseMu.Lock()
+		if !c.throttleClosed {
+			c.throttleClosed = true
+			close(c.throttleCloseCh)
+		}
+		c.throttleCloseMu.Unlock()
 	}
 	
 	// Close the underlying HTTP client's transport
