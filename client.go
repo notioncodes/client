@@ -50,6 +50,14 @@ func (c *Client) Users() *UserNamespace {
 	return c.Registry.Users()
 }
 
+// Comments returns the comment operations namespace.
+//
+// Returns:
+//   - *CommentNamespace: The comment operations namespace.
+func (c *Client) Comments() *CommentNamespace {
+	return c.Registry.Comments()
+}
+
 // GetMetrics returns current client metrics if metrics collection is enabled.
 //
 // Returns:

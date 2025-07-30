@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/url"
 	"strconv"
+	"sync"
 
 	"github.com/notioncodes/types"
 )
@@ -13,15 +14,65 @@ type BlockNamespace struct {
 	registry *Registry
 }
 
-// Get retrieves a single block by ID.
+// GetBlockOptions configures what additional data to retrieve with blocks.
+type GetBlockOptions struct {
+	IncludeComments bool `json:"include_comments"`
+}
+
+// GetBlockResult contains a block and its associated data.
+type GetBlockResult struct {
+	Block    *types.Block     `json:"block"`
+	Comments []*types.Comment `json:"comments,omitempty"`
+}
+
+// GetBlockResultWithError contains a block result and potential error.
+type GetBlockResultWithError struct {
+	GetBlockResult
+	Error error `json:"-"`
+}
+
+// DefaultGetBlockOptions returns default options for block retrieval.
+func DefaultGetBlockOptions() GetBlockOptions {
+	return GetBlockOptions{
+		IncludeComments: false,
+	}
+}
+
+// Get retrieves a single block by ID with optional comments.
+//
+// Arguments:
+//   - ctx: Context for cancellation and timeouts.
+//   - blockID: The ID of the block to retrieve.
+//   - opts: Options for what additional data to retrieve.
+//
+// Returns:
+//   - Result[GetBlockResult]: The block result with associated data.
+//
+// Example:
+//
+//	opts := GetBlockOptions{IncludeComments: true}
+//	result := registry.Blocks().Get(ctx, blockID, opts)
+//	if result.IsError() {
+//	    return result.Error
+//	}
+//	fmt.Printf("Block has %d comments\n", len(result.Data.Comments))
+func (ns *BlockNamespace) Get(ctx context.Context, blockID types.BlockID, opts GetBlockOptions) Result[GetBlockResult] {
+	resultWithError := ns.getBlockWithData(ctx, blockID, opts)
+	if resultWithError.Error != nil {
+		return Error[GetBlockResult](resultWithError.Error)
+	}
+	return Success(resultWithError.GetBlockResult)
+}
+
+// GetSimple retrieves a single block by ID without additional data (backwards compatibility).
 //
 // Arguments:
 //   - ctx: Context for cancellation and timeouts.
 //   - blockID: The ID of the block to retrieve.
 //
 // Returns:
-//   - Result[types.Block]: The block result with metadata.
-func (ns *BlockNamespace) Get(ctx context.Context, blockID types.BlockID) Result[types.Block] {
+//   - Result[types.Block]: The block result.
+func (ns *BlockNamespace) GetSimple(ctx context.Context, blockID types.BlockID) Result[types.Block] {
 	op, err := GetTyped[*Operator[types.Block]](ns.registry, "block")
 	if err != nil {
 		return Error[types.Block](err)
@@ -31,7 +82,96 @@ func (ns *BlockNamespace) Get(ctx context.Context, blockID types.BlockID) Result
 	return Execute(op, ctx, req)
 }
 
-// GetMany retrieves multiple blocks concurrently by their IDs.
+// GetMany retrieves multiple blocks concurrently by their IDs with optional comments.
+//
+// Arguments:
+//   - ctx: Context for cancellation and timeouts.
+//   - blockIDs: Slice of block IDs to retrieve.
+//   - opts: Options for what additional data to retrieve.
+//
+// Returns:
+//   - <-chan Result[GetBlockResult]: Channel of block results with associated data.
+//
+// Example:
+//
+//	blockIDs := []types.BlockID{blockID1, blockID2, blockID3}
+//	opts := GetBlockOptions{IncludeComments: true}
+//	results := registry.Blocks().GetMany(ctx, blockIDs, opts)
+//	for result := range results {
+//	    if result.IsError() {
+//	        log.Printf("Error: %v", result.Error)
+//	        continue
+//	    }
+//	    fmt.Printf("Block has %d comments\n", len(result.Data.Comments))
+//	}
+func (ns *BlockNamespace) GetMany(ctx context.Context, blockIDs []types.BlockID, opts GetBlockOptions) <-chan Result[GetBlockResult] {
+	resultCh := make(chan Result[GetBlockResult], len(blockIDs))
+
+	go func() {
+		defer close(resultCh)
+
+		// Process blocks concurrently
+		var wg sync.WaitGroup
+		semaphore := make(chan struct{}, 10) // Limit concurrent requests
+
+		for _, blockID := range blockIDs {
+			wg.Add(1)
+			go func(id types.BlockID) {
+				defer wg.Done()
+
+				// Acquire semaphore
+				semaphore <- struct{}{}
+				defer func() { <-semaphore }()
+
+				select {
+				case <-ctx.Done():
+					resultCh <- Error[GetBlockResult](ctx.Err())
+					return
+				default:
+				}
+
+				blockResultWithError := ns.getBlockWithData(ctx, id, opts)
+				if blockResultWithError.Error != nil {
+					resultCh <- Error[GetBlockResult](blockResultWithError.Error)
+				} else {
+					resultCh <- Success(blockResultWithError.GetBlockResult)
+				}
+			}(blockID)
+		}
+
+		wg.Wait()
+	}()
+
+	return resultCh
+}
+
+func (ns *BlockNamespace) GetWithOptions(ctx context.Context, blockID types.BlockID, opts GetBlockOptions) Result[GetBlockResult] {
+	blockResult := ns.GetSimple(ctx, blockID)
+	if blockResult.IsError() {
+		return Error[GetBlockResult](blockResult.Error)
+	}
+
+	result := GetBlockResult{
+		Block:    &blockResult.Data,
+		Comments: nil,
+	}
+
+	// Get comments for this block only if requested
+	if opts.IncludeComments {
+		comments, err := ns.getBlockComments(ctx, blockID)
+		if err != nil {
+			// If comment retrieval fails, still return the block without comments
+			// Don't fail the entire request for comment errors
+			result.Comments = []*types.Comment{}
+		} else {
+			result.Comments = comments
+		}
+	}
+
+	return Success(result)
+}
+
+// GetManySimple retrieves multiple blocks concurrently without additional data (backwards compatibility).
 //
 // Arguments:
 //   - ctx: Context for cancellation and timeouts.
@@ -39,7 +179,7 @@ func (ns *BlockNamespace) Get(ctx context.Context, blockID types.BlockID) Result
 //
 // Returns:
 //   - <-chan Result[types.Block]: Channel of block results.
-func (ns *BlockNamespace) GetMany(ctx context.Context, blockIDs []types.BlockID) <-chan Result[types.Block] {
+func (ns *BlockNamespace) GetManySimple(ctx context.Context, blockIDs []types.BlockID) <-chan Result[types.Block] {
 	op, err := GetTyped[*Operator[types.Block]](ns.registry, "block")
 	if err != nil {
 		resultCh := make(chan Result[types.Block], 1)
@@ -72,6 +212,64 @@ func (ns *BlockNamespace) GetChildren(ctx context.Context, blockID types.BlockID
 	}
 
 	return StreamPaginated(paginatedOp, ctx, req)
+}
+
+// GetChildrenWithOptions retrieves all child blocks with optional comments.
+//
+// Arguments:
+//   - ctx: Context for cancellation and timeouts.
+//   - blockID: The ID of the parent block.
+//   - opts: Options for what additional data to retrieve.
+//
+// Returns:
+//   - <-chan Result[GetBlockResult]: Channel of child block results with associated data.
+func (ns *BlockNamespace) GetChildrenWithOptions(ctx context.Context, blockID types.BlockID, opts GetBlockOptions) <-chan Result[GetBlockResult] {
+	resultCh := make(chan Result[GetBlockResult], 100)
+
+	go func() {
+		defer close(resultCh)
+
+		// Get basic children first
+		childrenCh := ns.GetChildren(ctx, blockID)
+
+		// Process each child and potentially add comments
+		for result := range childrenCh {
+			if result.IsError() {
+				resultCh <- Error[GetBlockResult](result.Error)
+				continue
+			}
+
+			// If comments are not requested, just wrap the block
+			if !opts.IncludeComments {
+				blockResult := GetBlockResult{
+					Block:    &result.Data,
+					Comments: nil,
+				}
+				resultCh <- Success(blockResult)
+				continue
+			}
+
+			// Get comments for this block
+			comments, err := ns.getBlockComments(ctx, result.Data.ID)
+			if err != nil {
+				// If comment retrieval fails, still return the block without comments
+				blockResult := GetBlockResult{
+					Block:    &result.Data,
+					Comments: []*types.Comment{},
+				}
+				resultCh <- Success(blockResult)
+				continue
+			}
+
+			blockResult := GetBlockResult{
+				Block:    &result.Data,
+				Comments: comments,
+			}
+			resultCh <- Success(blockResult)
+		}
+	}()
+
+	return resultCh
 }
 
 // GetChildrenRecursive retrieves all child blocks recursively, including nested children.
@@ -167,4 +365,39 @@ func (r *BlockChildrenListRequest) GetQuery() url.Values {
 // Validate validates the block children list request.
 func (r *BlockChildrenListRequest) Validate() error {
 	return r.BlockID.Validate()
+}
+
+// getBlockWithData is the central method that retrieves a block and its associated data.
+// This method handles the core logic for fetching blocks with comments.
+func (ns *BlockNamespace) getBlockWithData(ctx context.Context, blockID types.BlockID, opts GetBlockOptions) GetBlockResultWithError {
+	result := GetBlockResultWithError{}
+
+	// Step 1: Get the base block
+	blockResult := ns.GetSimple(ctx, blockID)
+	if blockResult.IsError() {
+		result.Error = blockResult.Error
+		return result
+	}
+	result.Block = &blockResult.Data
+
+	// Step 2: Get comments if requested
+	if opts.IncludeComments {
+		comments, err := ns.getBlockComments(ctx, blockID)
+		if err != nil {
+			// If comment retrieval fails, still return the block without comments
+			// Don't fail the entire request for comment errors
+			result.Comments = []*types.Comment{}
+		} else {
+			result.Comments = comments
+		}
+	}
+
+	return result
+}
+
+// getBlockComments retrieves all comments from a block.
+func (ns *BlockNamespace) getBlockComments(ctx context.Context, blockID types.BlockID) ([]*types.Comment, error) {
+	return ns.registry.Comments().GetAllByBlock(ctx, blockID, &ListCommentsOptions{
+		BlockID: &blockID,
+	})
 }

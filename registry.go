@@ -92,6 +92,11 @@ func (r *Registry) Users() *UserNamespace {
 	return &UserNamespace{registry: r}
 }
 
+// Comments returns the comment operations namespace.
+func (r *Registry) Comments() *CommentNamespace {
+	return &CommentNamespace{registry: r}
+}
+
 // registerCoreOperators registers all core Notion API operators so they
 // are available to the registry when called upon.
 func (r *Registry) registerCoreOperators() {
@@ -112,6 +117,10 @@ func (r *Registry) registerCoreOperators() {
 		return NewOperator[types.User](httpClient, config)
 	})
 
+	r.Register("comment", func(httpClient *HTTPClient, config *OperatorConfig) interface{} {
+		return NewOperator[types.Comment](httpClient, config)
+	})
+
 	// Paginated operators.
 	r.Register("page_paginated", func(httpClient *HTTPClient, config *OperatorConfig) interface{} {
 		return NewPaginatedOperator[types.Page](httpClient, config)
@@ -127,6 +136,10 @@ func (r *Registry) registerCoreOperators() {
 
 	r.Register("user_paginated", func(httpClient *HTTPClient, config *OperatorConfig) interface{} {
 		return NewPaginatedOperator[types.User](httpClient, config)
+	})
+
+	r.Register("comment_paginated", func(httpClient *HTTPClient, config *OperatorConfig) interface{} {
+		return NewPaginatedOperator[types.Comment](httpClient, config)
 	})
 
 	// Search operator.

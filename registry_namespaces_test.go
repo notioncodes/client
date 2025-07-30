@@ -113,7 +113,7 @@ func TestBlockNamespaceGet(_ *testing.T) {
 	blockID := types.BlockID("test-block-id")
 
 	// Test the method exists and compiles.
-	_ = blockNS.Get(ctx, blockID)
+	_ = blockNS.Get(ctx, blockID, GetBlockOptions{})
 }
 
 // TestBlockNamespaceGetChildren tests the BlockNamespace GetChildren method.
@@ -127,7 +127,7 @@ func TestBlockNamespaceGetChildren(t *testing.T) {
 	blockID := types.BlockID("test-block-id")
 
 	// Test the method exists and returns a channel.
-	resultCh := blockNS.GetMany(ctx, []types.BlockID{blockID})
+	resultCh := blockNS.GetMany(ctx, []types.BlockID{blockID}, GetBlockOptions{})
 	if resultCh == nil {
 		t.Error("expected GetMany to return a channel, got nil")
 	}
@@ -298,7 +298,7 @@ func TestNamespaceErrorHandling(t *testing.T) {
 
 	// Test BlockNamespace error handling
 	blockNS := registry.Blocks()
-	blockResult := blockNS.Get(ctx, types.BlockID("test"))
+	blockResult := blockNS.Get(ctx, types.BlockID("test"), GetBlockOptions{})
 	if !blockResult.IsError() {
 		t.Error("expected BlockNamespace.Get to return error when operator missing")
 	}

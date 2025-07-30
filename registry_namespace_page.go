@@ -18,26 +18,25 @@ type PageNamespace struct {
 // GetPageOptions configures what additional data to retrieve with pages.
 type GetPageOptions struct {
 	IncludeBlocks      bool `json:"include_blocks"`
-	IncludeComments    bool `json:"include_comments"`
-	IncludeAttachments bool `json:"include_attachments"`
 	IncludeChildren    bool `json:"include_children"` // For recursive block retrieval
+	IncludeComments    bool `json:"include_comments"` // For comments on blocks
+	IncludeAttachments bool `json:"include_attachments"`
 }
 
 // DefaultGetPageOptions returns default options for page retrieval.
 func DefaultGetPageOptions() GetPageOptions {
 	return GetPageOptions{
 		IncludeBlocks:      false,
+		IncludeChildren:    false,
 		IncludeComments:    false,
 		IncludeAttachments: false,
-		IncludeChildren:    false,
 	}
 }
 
 type GetPageResult struct {
-	Page        *types.Page      `json:"page"`
-	Blocks      []*types.Block   `json:"blocks,omitempty"`
-	Comments    []*types.Comment `json:"comments,omitempty"`
-	Attachments []*types.File    `json:"attachments,omitempty"`
+	Page        *types.Page    `json:"page"`
+	Blocks      []*types.Block `json:"blocks,omitempty"`
+	Attachments []*types.File  `json:"attachments,omitempty"`
 }
 
 // GetPageResultWithError contains a page result and potential error.
@@ -46,7 +45,7 @@ type GetPageResultWithError struct {
 	Error error `json:"-"`
 }
 
-// Get retrieves a single page by ID with optional blocks and comments.
+// Get retrieves a single page by ID with optional blocks.
 //
 // Arguments:
 //   - ctx: Context for cancellation and timeouts.
@@ -58,12 +57,14 @@ type GetPageResultWithError struct {
 //
 // Example:
 //
-//	opts := GetPageOptions{IncludeBlocks: true, IncludeComments: true}
+//	opts := GetPageOptions{IncludeBlocks: true, IncludeChildren: true}
 //	result := registry.Pages().Get(ctx, pageID, opts)
 //	if result.IsError() {
 //	    return result.Error
 //	}
 //	fmt.Printf("Page: %s, Blocks: %d\n", result.Data.Page.Title, len(result.Data.Blocks))
+//
+// Note: To retrieve comments on blocks, use BlockNamespace methods with GetBlockOptions{IncludeComments: true}
 func (ns *PageNamespace) Get(ctx context.Context, pageID types.PageID, opts GetPageOptions) Result[GetPageResult] {
 	resultWithError := ns.getPageWithData(ctx, pageID, opts)
 	if resultWithError.Error != nil {
@@ -90,7 +91,7 @@ func (ns *PageNamespace) GetSimple(ctx context.Context, pageID types.PageID) Res
 	return Execute(op, ctx, req)
 }
 
-// GetMany retrieves multiple pages concurrently by their IDs with optional blocks and comments.
+// GetMany retrieves multiple pages concurrently by their IDs with optional blocks.
 //
 // Arguments:
 //   - ctx: Context for cancellation and timeouts.
@@ -103,7 +104,7 @@ func (ns *PageNamespace) GetSimple(ctx context.Context, pageID types.PageID) Res
 // Example:
 //
 //	pageIDs := []types.PageID{pageID1, pageID2, pageID3}
-//	opts := GetPageOptions{IncludeBlocks: true}
+//	opts := GetPageOptions{IncludeBlocks: true, IncludeChildren: true}
 //	results := registry.Pages().GetMany(ctx, pageIDs, opts)
 //	for result := range results {
 //	    if result.IsError() {
@@ -112,6 +113,8 @@ func (ns *PageNamespace) GetSimple(ctx context.Context, pageID types.PageID) Res
 //	    }
 //	    fmt.Printf("Page: %s, Blocks: %d\n", result.Data.Page.Title, len(result.Data.Blocks))
 //	}
+//
+// Note: To retrieve comments on blocks, use BlockNamespace methods with GetBlockOptions{IncludeComments: true}
 func (ns *PageNamespace) GetMany(ctx context.Context, pageIDs []types.PageID, opts GetPageOptions) <-chan Result[GetPageResult] {
 	resultCh := make(chan Result[GetPageResult], len(pageIDs))
 
@@ -200,7 +203,7 @@ func (ns *PageNamespace) getPageWithData(ctx context.Context, pageID types.PageI
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			blocks, err := ns.getPageBlocks(ctx, pageID, opts.IncludeChildren)
+			blocks, err := ns.getPageBlocks(ctx, pageID, opts.IncludeChildren, opts.IncludeComments)
 			mu.Lock()
 			defer mu.Unlock()
 			if err != nil {
@@ -213,23 +216,7 @@ func (ns *PageNamespace) getPageWithData(ctx context.Context, pageID types.PageI
 		}()
 	}
 
-	// Step 3: Get comments if requested
-	if opts.IncludeComments {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			comments, err := ns.getPageComments(ctx, pageID)
-			mu.Lock()
-			defer mu.Unlock()
-			if err != nil {
-				if result.Error == nil {
-					result.Error = fmt.Errorf("failed to get comments: %w", err)
-				}
-			} else {
-				result.Comments = comments
-			}
-		}()
-	}
+	// Comments are now handled at the block level when blocks are retrieved with IncludeComments option
 
 	// Step 4: Get attachments if requested
 	if opts.IncludeAttachments {
@@ -255,14 +242,21 @@ func (ns *PageNamespace) getPageWithData(ctx context.Context, pageID types.PageI
 	return result
 }
 
-// getPageBlocks retrieves all blocks from a page.
-func (ns *PageNamespace) getPageBlocks(ctx context.Context, pageID types.PageID, includeChildren bool) ([]*types.Block, error) {
-	var ch <-chan Result[types.Block]
+// getPageBlocks retrieves all blocks from a page with optional comments.
+func (ns *PageNamespace) getPageBlocks(ctx context.Context, pageID types.PageID, includeChildren bool, includeComments bool) ([]*types.Block, error) {
+	// Use BlockNamespace methods with appropriate options
+	var ch <-chan Result[GetBlockResult]
 
+	blockOpts := GetBlockOptions{
+		IncludeComments: includeComments,
+	}
+
+	// TODO: Implement recursive children support when needed
 	if includeChildren {
-		ch = ns.registry.Blocks().GetChildrenRecursive(ctx, types.BlockID(pageID.String()))
+		// For now, just get direct children with options
+		ch = ns.registry.Blocks().GetChildrenWithOptions(ctx, types.BlockID(pageID.String()), blockOpts)
 	} else {
-		ch = ns.registry.Blocks().GetChildren(ctx, types.BlockID(pageID.String()))
+		ch = ns.registry.Blocks().GetChildrenWithOptions(ctx, types.BlockID(pageID.String()), blockOpts)
 	}
 
 	var blocks []*types.Block
@@ -270,18 +264,10 @@ func (ns *PageNamespace) getPageBlocks(ctx context.Context, pageID types.PageID,
 		if blockResult.IsError() {
 			return blocks, blockResult.Error
 		}
-		blocks = append(blocks, &blockResult.Data)
+		blocks = append(blocks, blockResult.Data.Block)
 	}
 
 	return blocks, nil
-}
-
-// getPageComments retrieves all comments from a page.
-// TODO: Implement when Comments namespace is added to the registry
-func (ns *PageNamespace) getPageComments(ctx context.Context, pageID types.PageID) ([]*types.Comment, error) {
-	// Comments are not yet implemented in the client registry
-	// This is a placeholder for when Comments namespace is available
-	return []*types.Comment{}, nil
 }
 
 // getPageAttachments retrieves all attachments from a page.

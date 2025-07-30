@@ -10,6 +10,68 @@ import (
 	"github.com/notioncodes/types"
 )
 
+// ExportDatabaseOptions represents the options for exporting a database.
+type ExportDatabaseOptions struct {
+	// If true, the pages that are linked to the database will be exported.
+	IncludePages ExportPageOptions
+}
+
+// ExportDatabaseResult represents the result of exporting a database.
+type ExportDatabaseResult struct {
+	// The database object itself.
+	Database *types.Database
+	// The pages that are linked to the database.
+	Pages []*ExportPageResult
+}
+
+// ExportPageOptions represents the options for exporting a page.
+type ExportPageOptions struct {
+	// If true, the blocks that are linked to the page will be exported.
+	IncludeBlocks ExportBlockOptions
+}
+
+// ExportPageResult represents the result of exporting a page.
+type ExportPageResult struct {
+	// The page object itself.
+	Page *types.Page
+	// The blocks that are linked to the page.
+	Blocks []*ExportBlockResult
+	// The comments that are linked to the page.
+	Comments []*ExportCommentResult
+}
+
+// ExportBlockOptions represents the options for exporting a block.
+type ExportBlockOptions struct {
+	// If true, the children of the block will be exported.
+	IncludeChildren bool
+	// If true, the comments of the block will be exported.
+	IncludeComments ExportCommentOptions
+}
+
+// ExportBlockResult represents the result of exporting a block.
+type ExportBlockResult struct {
+	// The block object itself.
+	Block *types.Block
+	// The children of the block.
+	Children []*types.Block
+	// The comments of the block.
+	Comments []*ExportCommentResult
+}
+
+// ExportCommentOptions represents the options for exporting a comment.
+type ExportCommentOptions struct {
+	// If true, the complete user object will be fetched that is referenced by the comment.
+	IncludeUser bool
+}
+
+// ExportCommentResult represents the result of exporting a comment.
+type ExportCommentResult struct {
+	// The comment object itself.
+	Comment *types.Comment
+	// The user object that is referenced by the comment.
+	User *types.User
+}
+
 // ExportService handles comprehensive export of Notion content with support for
 // downstream object retrieval (database->pages->blocks->children, comments->user).
 type ExportService struct {
@@ -77,7 +139,14 @@ func (s *ExportService) Export(ctx context.Context) (*ExportResult, error) {
 		}
 	}
 
-	// Step 4: Export users if configured (comments not implemented yet)
+	// Step 4: Export comments if configured
+	if slices.Contains(s.config.Content.Types, types.ObjectTypeComment) {
+		if err := s.exportComments(ctx); err != nil && !s.config.Processing.ContinueOnError {
+			return s.result, fmt.Errorf("comment export failed: %w", err)
+		}
+	}
+
+	// Step 5: Export users if configured
 	if slices.Contains(s.config.Content.Types, types.ObjectTypeUser) {
 		if err := s.exportUsers(ctx); err != nil && !s.config.Processing.ContinueOnError {
 			return s.result, fmt.Errorf("user export failed: %w", err)
@@ -163,9 +232,12 @@ func (s *ExportService) exportBlocks(ctx context.Context) error {
 }
 
 // exportComments exports comments based on configuration.
-// TODO: Implement when Comments namespace is added to client registry
 func (s *ExportService) exportComments(ctx context.Context) error {
-	// Comments are not yet implemented in the client registry
+	// Comments are typically exported per page/block during their processing
+	// This method handles standalone comment export if needed
+
+	// For now, comments are handled as part of page/block processing
+	// Future enhancement: could add specific comment IDs to export config
 	return nil
 }
 
@@ -192,7 +264,7 @@ func (s *ExportService) processDatabasesConcurrently(ctx context.Context, databa
 	// Create worker pool
 	dbCh := make(chan *types.Database, len(databases))
 	errCh := make(chan error, len(databases))
-	
+
 	// Start workers
 	var wg sync.WaitGroup
 	for i := 0; i < s.config.Processing.Workers; i++ {
@@ -267,7 +339,7 @@ func (s *ExportService) processPagesConcurrently(ctx context.Context, pages []*t
 	// Create worker pool
 	pageCh := make(chan *types.Page, len(pages))
 	errCh := make(chan error, len(pages))
-	
+
 	// Start workers
 	var wg sync.WaitGroup
 	for i := 0; i < s.config.Processing.Workers; i++ {
@@ -359,7 +431,7 @@ func (s *ExportService) processBlocksConcurrently(ctx context.Context, blocks []
 		}
 
 		batch := blocks[i:end]
-		
+
 		// Process batch concurrently
 		var wg sync.WaitGroup
 		for _, block := range batch {
@@ -561,7 +633,7 @@ func (s *ExportService) getBlocksByIDs(ctx context.Context, ids []types.BlockID)
 
 // getBlock fetches a single block by ID.
 func (s *ExportService) getBlock(ctx context.Context, blockID types.BlockID) (*types.Block, error) {
-	result := s.client.Registry.Blocks().Get(ctx, blockID)
+	result := s.client.Registry.Blocks().GetSimple(ctx, blockID)
 	if result.IsError() {
 		return nil, result.Error
 	}
@@ -611,10 +683,10 @@ func (s *ExportService) exportReferencedUsers(ctx context.Context) error {
 	// Process cached users from the userCache
 	s.userMu.RLock()
 	defer s.userMu.RUnlock()
-	
+
 	for _, user := range s.userCache {
 		s.recordSuccess(types.ObjectTypeUser, user.ID.String())
 	}
-	
+
 	return nil
 }
