@@ -21,7 +21,7 @@ func TestPageNamespaceGet(_ *testing.T) {
 	// Mock the result since we're testing the interface, not actual API calls.
 	// In a real test, you'd mock the HTTP client.
 	// For now, we're testing that the method exists and compiles correctly.
-	_ = pageNS.Get(ctx, pageID)
+	_ = pageNS.Get(ctx, pageID, GetPageOptions{})
 }
 
 // TestPageNamespaceGetMany tests the PageNamespace GetMany method.
@@ -39,7 +39,7 @@ func TestPageNamespaceGetMany(t *testing.T) {
 	}
 
 	// Test the method exists and returns a channel.
-	resultCh := pageNS.GetMany(ctx, pageIDs)
+	resultCh := pageNS.GetMany(ctx, pageIDs, GetPageOptions{})
 	if resultCh == nil {
 		t.Error("expected GetMany to return a channel, got nil")
 	}
@@ -273,13 +273,13 @@ func TestNamespaceErrorHandling(t *testing.T) {
 
 	// Test PageNamespace error handling
 	pageNS := registry.Pages()
-	result := pageNS.Get(ctx, types.PageID("test"))
+	result := pageNS.Get(ctx, types.PageID("test"), GetPageOptions{})
 	if !result.IsError() {
 		t.Error("expected PageNamespace.Get to return error when operator missing")
 	}
 
 	// Test GetMany error handling
-	resultCh := pageNS.GetMany(ctx, []types.PageID{types.PageID("test")})
+	resultCh := pageNS.GetMany(ctx, []types.PageID{types.PageID("test")}, GetPageOptions{})
 	select {
 	case result := <-resultCh:
 		if !result.IsError() {
@@ -337,7 +337,7 @@ func TestNamespaceContextCancellation(t *testing.T) {
 
 	// Test that methods respect cancelled context
 	pageNS := registry.Pages()
-	resultCh := pageNS.GetMany(ctx, []types.PageID{types.PageID("test")})
+	resultCh := pageNS.GetMany(ctx, []types.PageID{types.PageID("test")}, GetPageOptions{})
 
 	select {
 	case result := <-resultCh:

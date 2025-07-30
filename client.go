@@ -13,7 +13,7 @@ type Client struct {
 	Registry *Registry
 }
 
-// New creates a new Notion API client with the specified configuration.
+// NewClient creates a new Notion API client with the specified configuration.
 //
 // Arguments:
 //   - config: Configuration for the client behavior and performance characteristics.
@@ -21,7 +21,7 @@ type Client struct {
 // Returns:
 //   - *Client: A new client instance ready for API operations.
 //   - error: Configuration or initialization error.
-func New(config *Config) (*Client, error) {
+func NewClient(config *Config) (*Client, error) {
 	HttpClient, err := NewHTTPClient(config)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create HTTP client: %w", err)

@@ -93,7 +93,7 @@ func (c *ClientTestSuite) SetupTest() {
 	config.APIKey = c.apiKey
 
 	var err error
-	c.client, err = New(config)
+	c.client, err = NewClient(config)
 	if err != nil {
 		c.T().Fatalf("Expected no error creating client, got: %v", err)
 	}
