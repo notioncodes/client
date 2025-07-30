@@ -83,7 +83,7 @@ type BlockChildrenListRequest struct {
 
 // GetPath returns the API path for the block children list request.
 func (r *BlockChildrenListRequest) GetPath() string {
-	return "/v1/blocks/" + string(r.BlockID) + "/children"
+	return "/blocks/" + string(r.BlockID) + "/children"
 }
 
 // GetMethod returns the HTTP method for the block children list request.
