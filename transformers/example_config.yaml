@@ -1,0 +1,94 @@
+# Example transformer configuration
+# This file demonstrates how to configure transformers for the Notion client.
+
+# Markdown transformer - converts Notion objects to Markdown format
+markdown:
+  name: markdown
+  enabled: true
+  priority: 10
+  object_types: ["page", "database", "block"]
+  config:
+    output_format: "github"        # Options: "github", "commonmark", "notion"
+    include_metadata: true         # Include YAML frontmatter with metadata
+    include_properties: true       # Include page/database properties
+    code_block_language: ""        # Default language for code blocks
+    link_format: "markdown"        # Options: "markdown", "html", "notion"
+
+# JSON transformer - converts Notion objects to JSON format
+json:
+  name: json
+  enabled: true
+  priority: 5
+  object_types: ["page", "database", "block", "user"]
+  config:
+    pretty: true                   # Pretty-print JSON output
+    include_metadata: true         # Include object metadata
+    include_properties: true       # Include properties in output
+    compact_arrays: false          # Compact array representation
+    exclude_fields: []             # List of fields to exclude
+
+# Custom transformer example (disabled by default)
+custom_transformer:
+  name: custom_transformer
+  enabled: false
+  priority: 1
+  object_types: ["page"]
+  config:
+    custom_option1: "value1"
+    custom_option2: true
+    custom_option3: 42
+    nested_config:
+      sub_option1: "nested_value"
+      sub_option2: [1, 2, 3]
+
+# Analytics transformer example - extracts analytics data
+analytics:
+  name: analytics
+  enabled: false
+  priority: 15
+  object_types: ["page", "database"]
+  config:
+    track_views: true
+    track_edits: true
+    export_format: "csv"
+    include_timestamps: true
+
+# Export transformer example - exports to various formats
+export:
+  name: export
+  enabled: false
+  priority: 20
+  object_types: ["database"]
+  config:
+    output_format: "csv"           # Options: "csv", "xlsx", "pdf"
+    include_schema: true
+    batch_size: 100
+    compression: "gzip"
+
+# Redis transformer - exports Notion objects to Redis for fast access
+redis:
+  name: redis
+  enabled: true
+  priority: 5
+  object_types: ["page", "database", "block", "user"]
+  config:
+    # Redis connection settings
+    address: "localhost:6379"     # Redis server address
+    username: ""                  # Redis username (optional)
+    password: ""                  # Redis password (optional)
+    database: 0                   # Redis database number
+    
+    # Key configuration
+    key_prefix: "notion"          # Prefix for all Redis keys
+    key_separator: ":"            # Separator for key components
+    
+    # Data settings
+    ttl: "24h"                    # Time-to-live for keys (e.g., "1h", "30m", "86400s")
+    pretty_json: false            # Pretty-print JSON (increases size)
+    include_meta: true            # Include export metadata
+    
+    # Performance settings
+    pipeline: true                # Use Redis pipelining
+    batch_size: 100               # Batch size for operations
+    max_retries: 3                # Maximum retry attempts
+    retry_backoff: "1s"           # Backoff duration between retries
